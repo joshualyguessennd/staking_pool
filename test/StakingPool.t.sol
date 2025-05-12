@@ -27,7 +27,7 @@ contract StakingPoolTest is Test {
     function setUp() public {
         // Set up accounts
         vm.startPrank(owner);
-        
+
         // Deploy tokens
         usdcToken = new MockToken("USDC Token", "USDC");
         usdtToken = new MockToken("USDT Token", "USDT");
@@ -70,9 +70,9 @@ contract StakingPoolTest is Test {
     }
 
     function test_PoolCreation() public {
-        (address inputToken, uint256 rewardRate, uint256 totalStaked, bool isEth, bool active) = 
+        (address inputToken, uint256 rewardRate, uint256 totalStaked, bool isEth, bool active) =
             stakingPool.getPoolInfo(usdcPoolId);
-        
+
         assertEq(inputToken, address(usdcToken));
         assertEq(rewardRate, REWARD_RATE);
         assertEq(totalStaked, 0);
@@ -90,7 +90,7 @@ contract StakingPoolTest is Test {
         emit StakingPool.Staked(user1, usdcPoolId, STAKE_AMOUNT, block.timestamp);
         stakingPool.stake(usdcPoolId, STAKE_AMOUNT);
 
-        (, , uint256 totalStaked, , ) = stakingPool.getPoolInfo(usdcPoolId);
+        (,, uint256 totalStaked,,) = stakingPool.getPoolInfo(usdcPoolId);
         assertEq(totalStaked, STAKE_AMOUNT);
         assertEq(usdcToken.balanceOf(address(stakingPool)), STAKE_AMOUNT);
     }
@@ -101,7 +101,7 @@ contract StakingPoolTest is Test {
         emit StakingPool.Staked(user1, ethPoolId, STAKE_AMOUNT, block.timestamp);
         stakingPool.stake{value: STAKE_AMOUNT}(ethPoolId, STAKE_AMOUNT);
 
-        (, , uint256 totalStaked, , ) = stakingPool.getPoolInfo(ethPoolId);
+        (,, uint256 totalStaked,,) = stakingPool.getPoolInfo(ethPoolId);
         assertEq(totalStaked, STAKE_AMOUNT);
         assertEq(address(stakingPool).balance, STAKE_AMOUNT);
     }
@@ -126,7 +126,7 @@ contract StakingPoolTest is Test {
         emit StakingPool.Unstaked(user1, usdcPoolId, STAKE_AMOUNT, block.timestamp);
         stakingPool.unstake(usdcPoolId, STAKE_AMOUNT);
 
-        (, , uint256 totalStaked, , ) = stakingPool.getPoolInfo(usdcPoolId);
+        (,, uint256 totalStaked,,) = stakingPool.getPoolInfo(usdcPoolId);
         assertEq(totalStaked, 0);
         assertEq(usdcToken.balanceOf(user1), balanceBefore + STAKE_AMOUNT);
     }
@@ -141,7 +141,7 @@ contract StakingPoolTest is Test {
         emit StakingPool.Unstaked(user1, ethPoolId, STAKE_AMOUNT, block.timestamp);
         stakingPool.unstake(ethPoolId, STAKE_AMOUNT);
 
-        (, , uint256 totalStaked, , ) = stakingPool.getPoolInfo(ethPoolId);
+        (,, uint256 totalStaked,,) = stakingPool.getPoolInfo(ethPoolId);
         assertEq(totalStaked, 0);
         assertEq(user1.balance, balanceBefore + STAKE_AMOUNT);
     }
@@ -197,7 +197,7 @@ contract StakingPoolTest is Test {
         emit StakingPool.PoolUpdated(usdcPoolId, REWARD_RATE * 2, false);
         stakingPool.updatePool(usdcPoolId, REWARD_RATE * 2, false);
 
-        (, uint256 rewardRate, , , bool active) = stakingPool.getPoolInfo(usdcPoolId);
+        (, uint256 rewardRate,,, bool active) = stakingPool.getPoolInfo(usdcPoolId);
         assertEq(rewardRate, REWARD_RATE * 2);
         assertFalse(active);
     }
@@ -221,7 +221,7 @@ contract Malicious {
     fallback() external {
         if (attackCount < 5) {
             attackCount++;
-            (, , uint256 totalStaked, , ) = stakingPool.getPoolInfo(poolId);
+            (,, uint256 totalStaked,,) = stakingPool.getPoolInfo(poolId);
             if (totalStaked > 0) {
                 stakingPool.unstake(poolId, totalStaked);
             }
