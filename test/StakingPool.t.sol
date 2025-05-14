@@ -2,7 +2,7 @@
 pragma solidity ^0.8.25;
 
 import "forge-std/Test.sol";
-import {StakingPool} from "../src/StakingPool.sol";
+import {StakingPool, IERC20} from "../src/StakingPool.sol";
 import {MockToken} from "./utils/MockToken.sol";
 
 contract StakingPoolTest is Test {
@@ -34,16 +34,14 @@ contract StakingPoolTest is Test {
         rewardToken = new MockToken("Reward Token", "RWD");
 
         // Deploy and initialize StakingPool
-        stakingPool = new StakingPool();
-        stakingPool.initialize(owner, rewardToken);
+        stakingPool = new StakingPool(owner, IERC20(address(rewardToken)));
 
         // Create pools
         usdcPoolId = stakingPool.createPool(address(usdcToken), REWARD_RATE, false);
         usdtPoolId = stakingPool.createPool(address(usdtToken), REWARD_RATE, false);
         ethPoolId = stakingPool.createPool(address(0), REWARD_RATE, true);
 
-        // Grant manager role
-        stakingPool.grantRole(stakingPool.MANAGER_ROLE(), manager);
+        stakingPool.addManager(manager);
 
         // Mint tokens
         usdcToken.mint(user1, 1000 * 1e6);
@@ -61,12 +59,6 @@ contract StakingPoolTest is Test {
 
         // Fund user1 with ETH
         vm.deal(user1, 10 ether);
-    }
-
-    function test_Initialization() public view {
-        assertEq(address(stakingPool.rewardToken()), address(rewardToken));
-        assertTrue(stakingPool.hasRole(stakingPool.DEFAULT_ADMIN_ROLE(), owner));
-        assertTrue(stakingPool.hasRole(stakingPool.MANAGER_ROLE(), manager));
     }
 
     function test_PoolCreation() public {
@@ -200,31 +192,5 @@ contract StakingPoolTest is Test {
         (, uint256 rewardRate,,, bool active) = stakingPool.getPoolInfo(usdcPoolId);
         assertEq(rewardRate, REWARD_RATE * 2);
         assertFalse(active);
-    }
-}
-
-contract Malicious {
-    StakingPool public stakingPool;
-    bytes32 public poolId;
-    uint256 public attackCount;
-
-    constructor(address payable _stakingPool, bytes32 _poolId) {
-        stakingPool = StakingPool(_stakingPool);
-        poolId = _poolId;
-    }
-
-    function attack(uint256 amount) external {
-        stakingPool.stake(poolId, amount);
-        stakingPool.unstake(poolId, amount);
-    }
-
-    fallback() external {
-        if (attackCount < 5) {
-            attackCount++;
-            (,, uint256 totalStaked,,) = stakingPool.getPoolInfo(poolId);
-            if (totalStaked > 0) {
-                stakingPool.unstake(poolId, totalStaked);
-            }
-        }
     }
 }

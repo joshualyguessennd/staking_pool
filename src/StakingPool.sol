@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
-import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol";
-import {AccessControlDefaultAdminRulesUpgradeable} from
-    "openzeppelin-contracts-upgradeable/contracts/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
-import {SafeERC20, IERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuardUpgradeable} from
-    "openzeppelin-contracts-upgradeable/contracts/utils/ReentrancyGuardUpgradeable.sol";
+interface IERC20 {
+    function transfer(address to, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+}
 
-contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable {
-    using SafeERC20 for IERC20;
-
+contract StakingPool {
     struct Stake {
         uint256 amount;
         uint256 startTime;
@@ -30,9 +27,15 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
 
     mapping(bytes32 => InputPool) public pools; // poolId => InputPool
     IERC20 public rewardToken;
-
+    mapping(address => bool) public managers; // Tracks manager roles
     bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
 
+    // Reentrancy protection
+    uint256 private constant NOT_ENTERED = 1;
+    uint256 private constant ENTERED = 2;
+    uint256 private status = NOT_ENTERED;
+
+    // Custom errors
     error InvalidInputToken();
     error InvalidAmount();
     error NotInitialized();
@@ -41,40 +44,43 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
     error InactivePool();
     error PoolAlreadyExists();
     error InvalidPool();
+    error NotManager();
+    error ReentrantCall();
 
+    // Events
     event Staked(address indexed staker, bytes32 indexed poolId, uint256 amount, uint256 timestamp);
     event Unstaked(address indexed staker, bytes32 indexed poolId, uint256 amount, uint256 timestamp);
     event RewardClaimed(address indexed staker, bytes32 indexed poolId, uint256 amount, uint256 timestamp);
     event RewardFunded(address indexed funder, uint256 amount, uint256 timestamp);
     event PoolCreated(bytes32 indexed poolId, address inputToken, bool isEth, uint256 rewardRate);
     event PoolUpdated(bytes32 indexed poolId, uint256 newRewardRate, bool active);
+    event ManagerAdded(address indexed manager);
+    event ManagerRemoved(address indexed manager);
 
-    function initialize(address admin, IERC20 _rewardToken) public initializer {
+    // Modifiers
+    modifier onlyManager() {
+        if (!managers[msg.sender]) revert NotManager();
+        _;
+    }
+
+    modifier nonReentrant() {
+        if (status == ENTERED) revert ReentrantCall();
+        status = ENTERED;
+        _;
+        status = NOT_ENTERED;
+    }
+
+    constructor(address admin, IERC20 _rewardToken) {
         if (admin == address(0) || address(_rewardToken) == address(0)) {
             revert ZeroAddress();
         }
-        __AccessControlDefaultAdminRules_init_unchained(0, admin);
-        __UUPSUpgradeable_init_unchained();
-        __ReentrancyGuard_init_unchained();
-
         rewardToken = _rewardToken;
-        _grantRole(MANAGER_ROLE, admin);
+        managers[admin] = true;
+        emit ManagerAdded(admin);
     }
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
-
-    /**
-     * @dev Create a new staking pool.
-     * @param inputToken The address of the input token (ERC20) or address(0) for ETH.
-     * @param rewardRate The reward rate in basis points (1% = 100 bps).
-     * @param isEth True if the input token is ETH, false if it's an ERC20 token.
-     *
-     */
-    function createPool(address inputToken, uint256 rewardRate, bool isEth)
-        external
-        onlyRole(MANAGER_ROLE)
-        returns (bytes32)
-    {
+    // Create a new staking pool
+    function createPool(address inputToken, uint256 rewardRate, bool isEth) external onlyManager returns (bytes32) {
         bytes32 poolId = keccak256(abi.encodePacked(inputToken, isEth));
         if (pools[poolId].active) revert PoolAlreadyExists();
 
@@ -88,14 +94,8 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         return poolId;
     }
 
-    /**
-     * @dev Update the reward rate and active status of a pool.
-     * @param poolId The ID of the pool to update.
-     * @param newRewardRate The new reward rate in basis points.
-     * @param active The new active status of the pool.
-     *
-     */
-    function updatePool(bytes32 poolId, uint256 newRewardRate, bool active) external onlyRole(MANAGER_ROLE) {
+    // Update the reward rate and active status of a pool
+    function updatePool(bytes32 poolId, uint256 newRewardRate, bool active) external onlyManager {
         InputPool storage pool = pools[poolId];
         if (pool.inputToken == address(0) && !pool.isEth) revert InvalidPool();
 
@@ -105,22 +105,14 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         emit PoolUpdated(poolId, newRewardRate, active);
     }
 
-    /**
-     * @dev Fund the rewards for the staking pool.
-     * @param amount The amount of reward tokens to fund.
-     *
-     */
-    function fundRewards(uint256 amount) external onlyRole(MANAGER_ROLE) {
-        rewardToken.safeTransferFrom(msg.sender, address(this), amount);
+    // Fund the rewards for the staking pool
+    function fundRewards(uint256 amount) external onlyManager nonReentrant {
+        if (amount == 0) revert InvalidAmount();
+        safeTransferFrom(rewardToken, msg.sender, address(this), amount);
         emit RewardFunded(msg.sender, amount, block.timestamp);
     }
 
-    /**
-     * @dev Stake tokens in the pool.
-     * @param poolId The ID of the pool to stake in.
-     * @param amount The amount of tokens to stake.
-     *
-     */
+    // Stake tokens in the pool
     function stake(bytes32 poolId, uint256 amount) external payable nonReentrant {
         InputPool storage pool = pools[poolId];
         if (!pool.active) revert InactivePool();
@@ -134,14 +126,13 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         if (!userStake.initialized) {
             userStake.initialized = true;
             userStake.startTime = block.timestamp;
+            userStake.lastRewardTime = block.timestamp;
         }
 
         if (pool.isEth) {
-            // ETH staking
             if (msg.value != amount) revert InvalidAmount();
         } else {
-            // ERC20 staking
-            IERC20(pool.inputToken).safeTransferFrom(msg.sender, address(this), amount);
+            safeTransferFrom(IERC20(pool.inputToken), msg.sender, address(this), amount);
         }
 
         userStake.amount += amount;
@@ -150,12 +141,7 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         emit Staked(msg.sender, poolId, amount, block.timestamp);
     }
 
-    /**
-     * @dev Unstake tokens from the pool.
-     * @param poolId The ID of the pool to unstake from.
-     * @param amount The amount of tokens to unstake.
-     *
-     */
+    // Unstake tokens from the pool
     function unstake(bytes32 poolId, uint256 amount) external nonReentrant {
         InputPool storage pool = pools[poolId];
         if (!pool.active) revert InactivePool();
@@ -169,22 +155,16 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         pool.totalStaked -= amount;
 
         if (pool.isEth) {
-            // ETH withdrawal
             (bool success,) = msg.sender.call{value: amount}("");
             require(success, "ETH transfer failed");
         } else {
-            // ERC20 withdrawal
-            IERC20(pool.inputToken).safeTransfer(msg.sender, amount);
+            safeTransfer(IERC20(pool.inputToken), msg.sender, amount);
         }
 
         emit Unstaked(msg.sender, poolId, amount, block.timestamp);
     }
 
-    /**
-     * @dev Claim rewards from the pool.
-     * @param poolId The ID of the pool to claim rewards from.
-     *
-     */
+    // Claim rewards from the pool
     function claimRewards(bytes32 poolId) external nonReentrant returns (uint256) {
         InputPool storage pool = pools[poolId];
         if (!pool.active) revert InactivePool();
@@ -196,19 +176,14 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         uint256 reward = userStake.accumulatedRewards;
         if (reward > 0) {
             userStake.accumulatedRewards = 0;
-            rewardToken.safeTransfer(msg.sender, reward);
+            safeTransfer(rewardToken, msg.sender, reward);
             emit RewardClaimed(msg.sender, poolId, reward, block.timestamp);
         }
 
         return reward;
     }
 
-    /**
-     * @dev Update the rewards for a user in the pool.
-     * @param poolId The ID of the pool.
-     * @param account The address of the user.
-     *
-     */
+    // Update the rewards for a user in the pool
     function updateRewards(bytes32 poolId, address account) internal {
         InputPool storage pool = pools[poolId];
         Stake storage userStake = pool.stakes[account];
@@ -221,13 +196,7 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         userStake.lastRewardTime = block.timestamp;
     }
 
-    /**
-     * @dev Get the pending rewards for a user in the pool.
-     * @param poolId The ID of the pool.
-     * @param account The address of the user.
-     * @return pending rewards for the account.
-     *
-     */
+    // Get the pending rewards for a user in the pool
     function getPendingRewards(bytes32 poolId, address account) external view returns (uint256) {
         InputPool storage pool = pools[poolId];
         Stake storage userStake = pool.stakes[account];
@@ -239,10 +208,7 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
         return userStake.accumulatedRewards + newRewards;
     }
 
-    /**
-     * @dev Get the staked amount for a user in the pool.
-     * @param poolId The ID of the pool.
-     */
+    // Get pool information
     function getPoolInfo(bytes32 poolId)
         external
         view
@@ -250,6 +216,33 @@ contract StakingPool is AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeab
     {
         InputPool storage pool = pools[poolId];
         return (pool.inputToken, pool.rewardRate, pool.totalStaked, pool.isEth, pool.active);
+    }
+
+    // Add a new manager
+    function addManager(address newManager) external onlyManager {
+        if (newManager == address(0)) revert ZeroAddress();
+        managers[newManager] = true;
+        emit ManagerAdded(newManager);
+    }
+
+    // Remove a manager
+    function removeManager(address manager) external onlyManager {
+        if (manager == address(0)) revert ZeroAddress();
+        if (!managers[manager]) revert NotManager();
+        managers[manager] = false;
+        emit ManagerRemoved(manager);
+    }
+
+    function safeTransfer(IERC20 token, address to, uint256 amount) internal {
+        require(to != address(0), "Zero address");
+        bool success = token.transfer(to, amount);
+        require(success, "Transfer failed");
+    }
+
+    function safeTransferFrom(IERC20 token, address from, address to, uint256 amount) internal {
+        require(from != address(0) && to != address(0), "Zero address");
+        bool success = token.transferFrom(from, to, amount);
+        require(success, "TransferFrom failed");
     }
 
     // Allow contract to receive ETH
