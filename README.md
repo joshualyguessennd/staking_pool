@@ -13,7 +13,6 @@ Testing: Comprehensive Forge tests covering staking, unstaking, rewards, and sec
 Key files:
 
 src/StakingPool.sol: The main staking contract.
-src/MockToken.sol: A mock ERC20 token with blacklist functionality for testing.
 test/StakingPoolTest.sol: Foundry test suite.
 
 # Setup Instructions
